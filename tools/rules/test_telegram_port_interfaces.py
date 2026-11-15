@@ -9,6 +9,16 @@ SOURCE = Path(__file__).resolve().parents[2] / "Telegram" / "SourceFiles"
 
 
 class TelegramPortInterfaceTests(unittest.TestCase):
+    def test_windows_application_links_dns_api(self):
+        cmake = (SOURCE.parent / "CMakeLists.txt").read_text(encoding="utf-8")
+        self.assertIsNotNone(
+            re.search(
+                r"if \(WIN32\)\s+target_link_libraries\(Telegram PRIVATE dnsapi\)",
+                cmake,
+            ),
+            "Static Qt Network DNS lookup requires the Windows DNS import library",
+        )
+
     def test_custom_forward_paths_return_a_message_id_value(self):
         api = (SOURCE / "apiwrap.cpp").read_text(encoding="utf-8")
         custom_paths = api.split("FullMsgId ApiWrap::forwardMessages(", 1)[1].split(

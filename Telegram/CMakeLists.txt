@@ -2855,6 +2855,8 @@ if (APPLE AND NOT build_macstore)
 endif()
 
 if (WIN32)
+    target_link_libraries(Telegram PRIVATE dnsapi)
+
     # message(${CMAKE_GENERATOR})
     # mt.exe -manifest "${res_loc}/winrc/Telegram.manifest" "-inputresource:\"$<TARGET_FILE:Telegram>\";#1" "-outputresource:\"$<TARGET_FILE:Telegram>\";#1" >NUL
     # set(hash_symbol "#")
