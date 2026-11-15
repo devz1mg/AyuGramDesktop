@@ -55,6 +55,12 @@ jobs:
           python-version: '3.10'
           architecture: x64
 
+      - name: Check repository rules and Telegram interface contracts
+        run: |
+          Set-Location $env:REPO_DIR
+          python -m unittest discover -s tools/rules -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Select MSVC 14.44 and Windows SDK
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with:
