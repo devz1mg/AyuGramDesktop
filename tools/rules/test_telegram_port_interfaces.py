@@ -9,6 +9,72 @@ SOURCE = Path(__file__).resolve().parents[2] / "Telegram" / "SourceFiles"
 
 
 class TelegramPortInterfaceTests(unittest.TestCase):
+    def test_custom_forward_paths_return_a_message_id_value(self):
+        api = (SOURCE / "apiwrap.cpp").read_text(encoding="utf-8")
+        custom_paths = api.split("FullMsgId ApiWrap::forwardMessages(", 1)[1].split(
+            "auto &histories", 1
+        )[0]
+        self.assertIn("AyuForward::forwardMessages", custom_paths)
+        self.assertIn("AyuForward::intelligentForward", custom_paths)
+        self.assertNotRegex(
+            custom_paths,
+            r"\breturn\s*;",
+            "Custom forwarding has no synchronous local ID and must return an empty FullMsgId",
+        )
+
+    def test_link_info_includes_admin_rights_definition(self):
+        header = (SOURCE / "window/window_session_controller_link_info.h").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            '#include "data/data_chat_participant_status.h"',
+            header.split("struct PeerByLinkInfo", 1)[0],
+            "PeerByLinkInfo must not rely on incidental includes for ChatAdminRights",
+        )
+
+    def test_ayu_menu_icons_exist_in_current_styles(self):
+        available = set()
+        for path in SOURCE.rglob("*.style"):
+            available.update(re.findall(
+                r"^\s*(menuIcon\w+)\s*:",
+                path.read_text(encoding="utf-8"),
+                re.M,
+            ))
+        self.assertTrue(available, "No menu icon definitions found")
+        unknown = []
+        for path in (SOURCE / "ayu").rglob("*"):
+            if path.suffix not in {".cpp", ".h", ".mm"}:
+                continue
+            used = set(re.findall(
+                r"\bst::(menuIcon\w+)\b", path.read_text(encoding="utf-8")
+            ))
+            unknown.extend(
+                f"{path.relative_to(SOURCE)}: {icon}"
+                for icon in sorted(used - available)
+            )
+        self.assertEqual(unknown, [], "AyuGram must use current menu icon names")
+
+    def test_ayu_localization_keys_exist_in_current_catalog(self):
+        catalog = (SOURCE.parent / "Resources/langs/lang.strings").read_text(
+            encoding="utf-8"
+        )
+        available = set(re.findall(
+            r'^"(\w+)(?:#[^\"]+)?"\s*=', catalog, re.M
+        ))
+        self.assertTrue(available, "No language keys found")
+        unknown = []
+        for path in (SOURCE / "ayu").rglob("*"):
+            if path.suffix not in {".cpp", ".h", ".mm"}:
+                continue
+            used = set(re.findall(
+                r"\btr::((?:lng_|ayu_)\w+)\b", path.read_text(encoding="utf-8")
+            ))
+            unknown.extend(
+                f"{path.relative_to(SOURCE)}: {key}"
+                for key in sorted(used - available)
+            )
+        self.assertEqual(unknown, [], "AyuGram must use current localization keys")
+
     def test_inline_bot_helpers_cover_inline_message_constructors(self):
         scheme = (SOURCE / "mtproto/scheme/api.tl").read_text(encoding="utf-8")
         constructors = re.findall(
