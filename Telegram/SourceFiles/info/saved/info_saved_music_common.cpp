@@ -7,6 +7,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 */
 #include "info/saved/info_saved_music_common.h"
 
+#include "data/data_media_types.h"
 #include "data/data_peer.h"
 #include "data/data_saved_music.h"
 #include "data/data_saved_sublist.h"
@@ -36,7 +37,8 @@ namespace Info::Saved {
 namespace {
 
 [[nodiscard]] Profile::MusicButtonData DocumentMusicButtonData(
-		not_null<DocumentData*> document, not_null<HistoryItem*> message) {
+		not_null<DocumentData*> document,
+		not_null<HistoryItem*> message) {
 	const auto name = Ui::Text::FormatSongNameFor(document);
 
 	return {

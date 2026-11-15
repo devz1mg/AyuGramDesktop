@@ -1,0 +1,255 @@
+name: AyuGram Windows x64 Debug
+
+on:
+  push:
+    branches:
+      - 'update/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    if: github.repository == 'devz1mg/AyuGramDesktop'
+    name: Windows x64 / Qt 6 / Debug
+    runs-on: windows-2022
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      REPO_DIR: ${{ github.workspace }}\TBuild\tdesktop
+      LIBRARIES: ${{ github.workspace }}\TBuild\Libraries\win64
+      THIRD_PARTY: ${{ github.workspace }}\TBuild\ThirdParty
+      WINDOWS_SDK: '10.0.26100.0'
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
+      PYTHONUNBUFFERED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+
+    steps:
+      - name: Prepare runner
+        run: |
+          git config --global core.longpaths true
+          git config --global user.name "AyuGram CI"
+          git config --global user.email "ci@users.noreply.github.com"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\ayu-logs" | Out-Null
+          Get-PSDrive -PSProvider FileSystem | Format-Table Name, Used, Free
+
+      - name: Checkout source and recursive submodules
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          path: TBuild/tdesktop
+          fetch-depth: 1
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.10
+        id: python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.10'
+          architecture: x64
+
+      - name: Select MSVC 14.44 and Windows SDK
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: x64
+          vsversion: '2022'
+          toolset: '14.44'
+          sdk: ${{ env.WINDOWS_SDK }}
+
+      - name: Check toolchain and calculate dependency cache key
+        id: toolchain
+        env:
+          PYTHON_VERSION: ${{ steps.python.outputs.python-version }}
+          RECIPE_HASH: ${{ hashFiles('TBuild/tdesktop/Telegram/build/prepare/**', 'TBuild/tdesktop/Telegram/build/qt_version.py', 'TBuild/tdesktop/Telegram/configure.*', 'TBuild/tdesktop/Telegram/cmake/**', 'TBuild/tdesktop/cmake/**', 'TBuild/tdesktop/patches/**', 'TBuild/tdesktop/.gitmodules', 'TBuild/tdesktop/.github/workflows/build-windows.yml') }}
+        run: |
+          if ($env:Platform -ne 'x64' -or $env:VCToolsVersion -notlike '14.44.*') {
+            throw 'Expected the MSVC 14.44 x64 Native Tools environment.'
+          }
+          if ($env:WindowsSDKVersion.TrimEnd('\') -ne $env:WINDOWS_SDK) {
+            throw 'The requested Windows SDK was not selected.'
+          }
+          $cmakeVersion = ((& cmake --version)[0] -split ' ')[2]
+          if ($LASTEXITCODE -ne 0 -or [version]$cmakeVersion -lt [version]'3.25') {
+            throw 'CMake 3.25 or newer is required.'
+          }
+          & ninja --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not $env:RECIPE_HASH) { throw 'Dependency recipe hash is empty.' }
+          "key=win2022-x64-qt6-debug-v1-$env:VCToolsVersion-$env:WINDOWS_SDK-$env:PYTHON_VERSION-$cmakeVersion-$env:RECIPE_HASH" >> $env:GITHUB_OUTPUT
+          New-Item -ItemType Directory -Force $env:LIBRARIES, $env:THIRD_PARTY | Out-Null
+
+      - name: Restore build tools
+        id: tools-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ env.THIRD_PARTY }}
+          key: tools-${{ steps.toolchain.outputs.key }}
+
+      - name: Restore libraries
+        id: libraries-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ${{ env.LIBRARIES }}/*
+            !${{ env.LIBRARIES }}/[qQ]t[_-]*
+            !${{ env.LIBRARIES }}/cache_keys
+            ${{ env.LIBRARIES }}/cache_keys/*
+            !${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
+          key: libraries-${{ steps.toolchain.outputs.key }}
+
+      - name: Restore Qt 6
+        id: qt-cache
+        uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ${{ env.LIBRARIES }}/[qQ]t[_-]*
+            ${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
+          key: qt-${{ steps.toolchain.outputs.key }}
+
+      - name: Prepare Debug dependencies and static Qt 6
+        id: prepare
+        timeout-minutes: 230
+        run: |
+          & "$env:REPO_DIR\Telegram\build\prepare\win.bat" skip-release silent qt6 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\prepare.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Trim dependency intermediates using the upstream retention rules
+        shell: bash
+        run: |
+          find "$LIBRARIES" \( \( ! \( -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.dll' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' \) -type f \) -o -empty \) -delete
+          df -h .
+
+      - name: Save build tools before application compilation
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ env.THIRD_PARTY }}
+          key: tools-${{ steps.toolchain.outputs.key }}
+
+      - name: Save libraries before application compilation
+        if: steps.libraries-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ${{ env.LIBRARIES }}/*
+            !${{ env.LIBRARIES }}/[qQ]t[_-]*
+            !${{ env.LIBRARIES }}/cache_keys
+            ${{ env.LIBRARIES }}/cache_keys/*
+            !${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
+          key: libraries-${{ steps.toolchain.outputs.key }}
+
+      - name: Save Qt 6 before application compilation
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: |
+            ${{ env.LIBRARIES }}/[qQ]t[_-]*
+            ${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
+          key: qt-${{ steps.toolchain.outputs.key }}
+
+      - name: Configure unsigned development application
+        id: configure
+        working-directory: TBuild/tdesktop/Telegram
+        run: |
+          # https://github.com/AyuGram/AyuGramDesktop/blob/dev/docs/building-win.md
+          & .\configure.bat -G "Ninja Multi-Config" qt6 `
+            -D TDESKTOP_API_ID=2040 `
+            -D TDESKTOP_API_HASH=b18441a1ff607e10a989891a5462e627 `
+            -D CMAKE_CONFIGURATION_TYPES=Debug `
+            -D CMAKE_BUILD_TYPE=Debug `
+            -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= `
+            -D "CMAKE_C_FLAGS_DEBUG=/Od /Ob0 /RTC1" `
+            -D "CMAKE_CXX_FLAGS_DEBUG=/Od /Ob0 /RTC1" `
+            -D DESKTOP_APP_DISABLE_AUTOUPDATE=ON `
+            -D DESKTOP_APP_DISABLE_CRASH_REPORTS=ON `
+            -D DESKTOP_APP_ENABLE_LTO=OFF `
+            2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\configure.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build desktop application
+        timeout-minutes: 100
+        working-directory: TBuild/tdesktop
+        run: |
+          cmake --build out --config Debug --target Telegram --parallel 2 2>&1 |
+            Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\build.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate x64 executable and stage runtime files
+        id: package
+        run: |
+          $source = Join-Path $env:REPO_DIR 'out\Debug'
+          $artifact = Join-Path $env:RUNNER_TEMP 'AyuGram-windows-x64-Debug'
+          foreach ($relative in @('AyuGram.exe', 'modules\x64\d3d\d3dcompiler_47.dll')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $source $relative) -PathType Leaf)) {
+              throw "Required runtime file is missing: $relative"
+            }
+          }
+          $reader = [IO.BinaryReader]::new([IO.File]::OpenRead((Join-Path $source 'AyuGram.exe')))
+          try {
+            if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Not a Windows executable.' }
+            $reader.BaseStream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            if ($peOffset -lt 0x40 -or $peOffset -gt ($reader.BaseStream.Length - 26)) {
+              throw 'Invalid PE header offset.'
+            }
+            $reader.BaseStream.Position = $peOffset
+            if ($reader.ReadUInt32() -ne 0x4550 -or $reader.ReadUInt16() -ne 0x8664) {
+              throw 'Expected an AMD64 PE executable.'
+            }
+            $reader.BaseStream.Position = $peOffset + 24
+            if ($reader.ReadUInt16() -ne 0x20b) { throw 'Expected a PE32+ executable.' }
+          } finally {
+            $reader.Dispose()
+          }
+          New-Item -ItemType Directory -Force $artifact | Out-Null
+          Copy-Item -LiteralPath (Join-Path $source 'AyuGram.exe') -Destination $artifact
+          Copy-Item -LiteralPath (Join-Path $source 'modules') -Destination $artifact -Recurse
+          Get-ChildItem -LiteralPath $source -Filter '*.dll' -File |
+            Copy-Item -Destination $artifact
+          Get-FileHash -LiteralPath (Join-Path $artifact 'AyuGram.exe') -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  AyuGram.exe" } |
+            Set-Content -LiteralPath (Join-Path $artifact 'SHA256SUMS.txt') -Encoding utf8
+
+      - name: Smoke-test staged application with an empty profile
+        timeout-minutes: 2
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'AyuGram-windows-x64-Debug\AyuGram.exe'
+          $profile = Join-Path $env:RUNNER_TEMP 'ayu-smoke'
+          New-Item -ItemType Directory -Force $profile | Out-Null
+          $app = Start-Process -FilePath $exe -ArgumentList @('-noupdate', '-workdir', "`"$profile`"") -PassThru
+          try {
+            Start-Sleep -Seconds 15
+            $app.Refresh()
+            if ($app.HasExited) { throw "AyuGram exited during startup: $($app.ExitCode)" }
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+          }
+
+      - name: Upload desktop application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: AyuGram-windows-x64-Qt6-Debug-${{ github.sha }}
+          path: ${{ runner.temp }}/AyuGram-windows-x64-Debug/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-x64-build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/ayu-logs/
+            ${{ runner.temp }}/ayu-smoke/log*.txt
+            ${{ env.REPO_DIR }}/out/CMakeFiles/CMakeConfigureLog.yaml
+          if-no-files-found: warn
+          retention-days: 7
