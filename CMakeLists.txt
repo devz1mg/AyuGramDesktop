@@ -54,7 +54,9 @@ include(cmake/nuget.cmake)
 include(cmake/validate_d3d_compiler.cmake)
 include(cmake/target_prepare_qrc.cmake)
 
+option(DESKTOP_APP_DISABLE_AUTOUPDATE "Disable automatic updates." ON)
 include(cmake/options.cmake)
+
 include(cmake/external/qt/package.cmake)
 
 set(desktop_app_skip_libs
