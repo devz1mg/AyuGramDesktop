@@ -123,6 +123,9 @@ jobs:
         id: prepare
         timeout-minutes: 230
         run: |
+          # The batch recipes call Windows PowerShell 5.1 via cmd.exe/Python.
+          # Do not let it load PowerShell Core's incompatible Archive module.
+          $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
           & "$env:REPO_DIR\Telegram\build\prepare\win.bat" skip-release silent qt6 2>&1 |
             Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\prepare.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
