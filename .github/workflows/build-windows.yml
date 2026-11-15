@@ -89,6 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if (-not $env:RECIPE_HASH) { throw 'Dependency recipe hash is empty.' }
           "key=win2022-x64-qt6-debug-v1-$env:VCToolsVersion-$env:WINDOWS_SDK-$env:PYTHON_VERSION-$cmakeVersion-$env:RECIPE_HASH" >> $env:GITHUB_OUTPUT
+          "restore-prefix=win2022-x64-qt6-debug-v1-$env:VCToolsVersion-$env:WINDOWS_SDK-$env:PYTHON_VERSION-$cmakeVersion-" >> $env:GITHUB_OUTPUT
           New-Item -ItemType Directory -Force $env:LIBRARIES, $env:THIRD_PARTY | Out-Null
 
       - name: Restore build tools
@@ -97,8 +98,10 @@ jobs:
         with:
           path: ${{ env.THIRD_PARTY }}
           key: tools-${{ steps.toolchain.outputs.key }}
+          restore-keys: tools-${{ steps.toolchain.outputs.restore-prefix }}
 
       - name: Restore libraries
+        # prepare.py validates the per-stage recipe keys after a fallback hit.
         id: libraries-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
@@ -109,8 +112,10 @@ jobs:
             ${{ env.LIBRARIES }}/cache_keys/*
             !${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
           key: libraries-${{ steps.toolchain.outputs.key }}
+          restore-keys: libraries-${{ steps.toolchain.outputs.restore-prefix }}
 
       - name: Restore Qt 6
+        # Restore only caches for the same architecture and toolchain.
         id: qt-cache
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
@@ -118,22 +123,46 @@ jobs:
             ${{ env.LIBRARIES }}/[qQ]t[_-]*
             ${{ env.LIBRARIES }}/cache_keys/[qQ]t[_-]*
           key: qt-${{ steps.toolchain.outputs.key }}
+          restore-keys: qt-${{ steps.toolchain.outputs.restore-prefix }}
 
       - name: Prepare Debug dependencies and static Qt 6
+        # Generated source files are required inputs, not disposable intermediates.
         id: prepare
         timeout-minutes: 230
         run: |
           # The batch recipes call Windows PowerShell 5.1 via cmd.exe/Python.
           # Do not let it load PowerShell Core's incompatible Archive module.
           $env:PSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+          # Warm caches are revalidated by prepare.py's per-stage recipe keys.
+          # Repair older pruned caches whose Rust keys survived their sources.
+          $requiredRust = @(
+            'tlottie\Cargo.toml',
+            'wallet-engine\Cargo.toml',
+            'tdesktop_rust\out\src\wallet_engine\wallet_engine.cpp'
+          )
+          $missingRust = @($requiredRust | Where-Object {
+            -not (Test-Path -LiteralPath (Join-Path $env:LIBRARIES $_) -PathType Leaf)
+          })
+          if ($missingRust.Count) {
+            Write-Host 'Regenerating incomplete Rust source and binding stages.'
+            foreach ($stage in @('tlottie', 'wallet-engine', 'tdesktop_rust')) {
+              $marker = Join-Path $env:LIBRARIES "cache_keys\$stage"
+              if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Force }
+            }
+          }
           & "$env:REPO_DIR\Telegram\build\prepare\win.bat" skip-release silent qt6 2>&1 |
             Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\prepare.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($relative in $requiredRust) {
+            if (-not (Test-Path -LiteralPath (Join-Path $env:LIBRARIES $relative) -PathType Leaf)) {
+              throw "Required Rust build input is missing: $relative"
+            }
+          }
 
       - name: Trim dependency intermediates using the upstream retention rules
         shell: bash
         run: |
-          find "$LIBRARIES" \( \( ! \( -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.dll' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' \) -type f \) -o -empty \) -delete
+          find "$LIBRARIES" \( \( ! \( -name '*.lib' -o -name '*.a' -o -name '*.exe' -o -name '*.dll' -o -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.cmake' -o -name '*.pc' -o -path '*/include/*' -o -path '*/objects-*' -o -path '*/cache_keys/*' -o -path '*/patches/*' -o -path '*/nv-codec-headers/*' -o -path '*/tdesktop_rust/out/src/*' -o -path '*/tlottie/*' -o -path '*/wallet-engine/*' \) -type f \) -o -empty \) -delete
           df -h .
 
       - name: Save build tools before application compilation
