@@ -9,6 +9,28 @@ SOURCE = Path(__file__).resolve().parents[2] / "Telegram" / "SourceFiles"
 
 
 class TelegramPortInterfaceTests(unittest.TestCase):
+    def test_inline_bot_helpers_cover_inline_message_constructors(self):
+        scheme = (SOURCE / "mtproto/scheme/api.tl").read_text(encoding="utf-8")
+        constructors = re.findall(
+            r"^(\w+)#[0-9a-f]+[^\n]* = BotInlineMessage;", scheme, re.M
+        )
+        self.assertTrue(constructors, "No inline message constructors found")
+        required = {"MTPD" + name for name in constructors}
+        helper = (SOURCE / "ayu/utils/telegram_helpers.cpp").read_text(
+            encoding="utf-8"
+        )
+        visitors = helper.split("const auto text = message->match(")[1:]
+        self.assertTrue(visitors, "No inline message visitors found")
+        for index, body in enumerate(visitors, start=1):
+            with self.subTest(visitor=index):
+                visitor = body.split("if (text.isEmpty()", 1)[0]
+                handled = set(re.findall(r"const (MTPD\w+)\s*&", visitor))
+                self.assertEqual(
+                    required - handled,
+                    set(),
+                    "Inline bot helpers must handle every BotInlineMessage constructor",
+                )
+
     def test_message_flag_references_exist_in_current_enum(self):
         types = (SOURCE / "data/data_types.h").read_text(encoding="utf-8")
         definition = re.search(

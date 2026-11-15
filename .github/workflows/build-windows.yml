@@ -216,7 +216,7 @@ jobs:
         timeout-minutes: 100
         working-directory: TBuild/tdesktop
         run: |
-          cmake --build out --config Debug --target Telegram --parallel 2 2>&1 |
+          cmake --build out --config Debug --target Telegram --parallel 2 -- -k 0 2>&1 |
             Tee-Object -FilePath "$env:RUNNER_TEMP\ayu-logs\build.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
